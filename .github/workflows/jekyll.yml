@@ -1,5 +1,5 @@
-# Build and deploy Jekyll to GitHub Pages
-name: Deploy Academic Pages site to Pages
+# Build Jekyll and deploy when GitHub Pages has been enabled.
+name: Build and deploy academic homepage
 
 on:
   push:
@@ -18,6 +18,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    outputs:
+      pages_enabled: ${{ steps.pages.outputs.enabled }}
+      base_path: ${{ steps.pages.outputs.base_path }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
@@ -36,19 +39,37 @@ jobs:
       - name: Minify JS files
         run: |
           uglifyjs assets/js/plugins/jquery.greedy-navigation.js assets/js/_main.js assets/js/theme.js -c -m -o assets/js/main.min.js
-      - name: Configure GitHub Pages
+      - name: Check GitHub Pages configuration
         id: pages
-        uses: actions/configure-pages@v6.0.0
+        uses: actions/github-script@v7
         with:
-          enablement: true
+          script: |
+            try {
+              const { data } = await github.rest.repos.getPages({
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              });
+              core.setOutput('enabled', 'true');
+              core.setOutput('base_path', new URL(data.html_url).pathname.replace(/\/$/, ''));
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              core.setOutput('enabled', 'false');
+              core.warning('GitHub Pages is not enabled yet. The site will still be built and checked; enable Pages with GitHub Actions as its source to deploy it.');
+            }
       - name: Build with Jekyll
-        run: bundle exec jekyll build --baseurl "${{ steps.pages.outputs.base_path }}"
+        run: |
+          if [ "${{ steps.pages.outputs.enabled }}" = "true" ]; then
+            bundle exec jekyll build --baseurl "${{ steps.pages.outputs.base_path }}"
+          else
+            bundle exec jekyll build
+          fi
         env:
           JEKYLL_ENV: production
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v5.0.0
 
   deploy:
+    if: needs.build.outputs.pages_enabled == 'true'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
